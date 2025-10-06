@@ -1,0 +1,16 @@
+name = "dorianmariecom-proxy"
+main = "src/worker.js"
+compatibility_date = "2025-10-06"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "dorianmariecom-proxy"
+preview_bucket_name = "dorianmariecom-proxy-preview"
+
+# Bind this worker to the custom subdomain via a route
+[[routes]]
+pattern = "proxy.dorianmarie.com/*"
+zone_name = "dorianmarie.com"
+
+[observability]
+enabled = true
