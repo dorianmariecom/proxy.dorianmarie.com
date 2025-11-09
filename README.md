@@ -22,8 +22,8 @@ A Cloudflare Worker that downloads a file from a URL, caches it in R2, and serve
    ```
 2. Create the R2 buckets (production and preview):
    ```bash
-   wrangler r2 bucket create proxy-cache
-   wrangler r2 bucket create proxy-cache-dev
+   wrangler r2 bucket create dorianmariecom-proxy
+   wrangler r2 bucket create dorianmariecom-proxy-preview
    ```
 3. Publish the worker:
    ```bash

@@ -23,6 +23,72 @@ function inferFilenameFromUrl(u) {
 	return parts[parts.length - 1] || null;
 }
 
+function getFileExtension(filename, contentType) {
+	// Try to get extension from filename first
+	if (filename) {
+		const lastDot = filename.lastIndexOf(".");
+		if (lastDot > 0 && lastDot < filename.length - 1) {
+			return filename.substring(lastDot);
+		}
+	}
+	
+	// Fallback to content type
+	if (contentType) {
+		const typeMap = {
+			"image/jpeg": ".jpg",
+			"image/jpg": ".jpg",
+			"image/png": ".png",
+			"image/gif": ".gif",
+			"image/webp": ".webp",
+			"image/svg+xml": ".svg",
+			"image/bmp": ".bmp",
+			"image/ico": ".ico",
+			"image/x-icon": ".ico"
+		};
+		return typeMap[contentType.toLowerCase()] || ".jpg";
+	}
+	
+	return ".jpg"; // Default extension
+}
+
+function sanitizeUrlForFilename(url) {
+	// Extract meaningful parts from URL: hostname and pathname
+	const hostname = url.hostname.replace(/^www\./, ""); // Remove www. prefix
+	const pathname = url.pathname;
+	
+	// Combine hostname and pathname, then sanitize
+	let combined = hostname + pathname;
+	
+	// Remove protocol, query params, and hash
+	// Keep only alphanumeric, hyphens, and underscores
+	combined = combined
+		.replace(/[^a-zA-Z0-9\-_]/g, "-") // Replace non-alphanumeric with hyphens
+		.replace(/-+/g, "-") // Collapse multiple hyphens
+		.replace(/^-|-$/g, ""); // Remove leading/trailing hyphens
+	
+	// Limit length to 40 characters
+	if (combined.length > 40) {
+		combined = combined.substring(0, 40);
+	}
+	
+	return combined || "image"; // Fallback if empty
+}
+
+function generateRandomFilename(sourceUrl, extension) {
+	// Generate a random 16-character hex string (8 bytes)
+	const randomBytes = new Uint8Array(8);
+	crypto.getRandomValues(randomBytes);
+	const randomHex = Array.from(randomBytes)
+		.map(b => b.toString(16).padStart(2, "0"))
+		.join("");
+	
+	// Get sanitized URL part
+	const sanitizedUrl = sanitizeUrlForFilename(sourceUrl);
+	
+	// Combine: sanitized-url-randomhex.extension
+	return `${sanitizedUrl}-${randomHex}${extension}`;
+}
+
 function buildContentDisposition(disposition, filename) {
 	if (!filename) return disposition;
 	const sanitized = filename.replace(/[\r\n"]+/g, "");
@@ -62,6 +128,9 @@ export default {
 		if (cached) {
 			const headers = new Headers();
 			const ct = (cached.httpMetadata && cached.httpMetadata.contentType) || "application/octet-stream";
+			if (!ct.toLowerCase().startsWith("image/")) {
+				return new Response("Only images are allowed", { status: 415 });
+			}
 			headers.set("Content-Type", ct);
 			headers.set("ETag", cached.etag);
 			headers.set("Accept-Ranges", "bytes");
@@ -72,7 +141,12 @@ export default {
 			const cdMeta = cached.httpMetadata && cached.httpMetadata.contentDisposition;
 			const fromMeta = cdMeta && cdMeta.split("filename=") && cdMeta.split("filename=")[1];
 			const metaFilename = fromMeta ? fromMeta.replace(/\"/g, "") : null;
-			const filename = explicitFilename || metaFilename || null;
+			const originalFilename = explicitFilename || metaFilename || null;
+			const extension = getFileExtension(originalFilename, ct);
+			// For cached files, we need to reconstruct the source URL or use a default
+			// Since we don't have the original URL in cache, we'll use a generic approach
+			const sourceUrl = new URL(sourceUrlStr);
+			const filename = explicitFilename || generateRandomFilename(sourceUrl, extension);
 			headers.set("Content-Disposition", buildContentDisposition(disposition, filename));
 
 			return new Response(cached.body, { status: 200, headers });
@@ -89,7 +163,10 @@ export default {
 			});
 		}
 
-		const contentType = originResp.headers.get("content-type") || undefined;
+		const contentType = originResp.headers.get("content-type") || "";
+		if (!contentType.toLowerCase().startsWith("image/")) {
+			return new Response("Only images are allowed", { status: 415 });
+		}
 		const contentLengthHeader = originResp.headers.get("content-length");
 
 		let bodyForClient;
@@ -121,8 +198,10 @@ export default {
 		});
 
 		const headers = new Headers(originResp.headers);
-		const fallbackFilename = explicitFilename || inferFilenameFromUrl(sourceUrl);
-		headers.set("Content-Disposition", buildContentDisposition(disposition, fallbackFilename));
+		const originalFilename = explicitFilename || inferFilenameFromUrl(sourceUrl);
+		const extension = getFileExtension(originalFilename, contentType || null);
+		const filename = explicitFilename || generateRandomFilename(sourceUrl, extension);
+		headers.set("Content-Disposition", buildContentDisposition(disposition, filename));
 		// Adjust Content-Length: keep if origin provided and we streamed; if we buffered, set to exact length
 		if (!(contentLengthHeader && !Number.isNaN(Number(contentLengthHeader)))) {
 			// In the buffered case, bodyForClient is a single chunk stream; set length explicitly
