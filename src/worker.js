@@ -104,6 +104,28 @@ function isValidHttpUrl(s) {
   }
 }
 
+// CDN subdomain prefixes: when image is on these, use main site as Referer (e.g. www.leboncoin.fr for img.leboncoin.fr)
+const CDN_SUBDOMAIN_PREFIXES = [
+  "img.", "static.", "media.", "cdn.", "assets.", "images.", "image.",
+  "lvdneng.", "vdneng.", "cdn1.", "cdn2."
+];
+
+function getRefererForUrl(sourceUrl) {
+  const hostname = sourceUrl.hostname || "";
+  const origin = sourceUrl.origin;
+
+  const isCdnSubdomain = CDN_SUBDOMAIN_PREFIXES.some(
+    (prefix) => hostname.startsWith(prefix)
+  );
+  const parts = hostname.split(".");
+  // Use main site (www.<root>) when image is on a CDN subdomain and we have at least 2 labels for root (e.g. leboncoin.fr)
+  if (isCdnSubdomain && parts.length >= 2) {
+    const rootDomain = parts.slice(1).join(".");
+    return `https://www.${rootDomain}/`;
+  }
+  return origin ? `${origin}/` : null;
+}
+
 function jsonError(message, status = 400) {
   return new Response(
     JSON.stringify({ error: message }),
@@ -162,7 +184,23 @@ export default {
     }
 
     const sourceUrl = new URL(sourceUrlStr);
+    // Use browser-like headers so CDNs (leboncoin, antikobjet, rosselcdn, etc.) don't return 403 Forbidden
+    const fetchHeaders = new Headers({
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept:
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Sec-Fetch-Dest": "image",
+      "Sec-Fetch-Mode": "no-cors",
+      "Sec-Fetch-Site": "cross-site"
+    });
+    // Many CDNs expect Referer to be the main site (e.g. www.leboncoin.fr for img.leboncoin.fr, www.rosselcdn.net for lvdneng.rosselcdn.net)
+    const referer = getRefererForUrl(sourceUrl);
+    if (referer) fetchHeaders.set("Referer", referer);
+
     const originResp = await fetch(sourceUrl.toString(), {
+      headers: fetchHeaders,
       cf: { cacheTtl: 0, cacheEverything: false }
     });
     if (!originResp.ok || !originResp.body) {
@@ -172,7 +210,11 @@ export default {
 
     const contentType = originResp.headers.get("content-type") || "";
     if (!contentType.toLowerCase().startsWith("image/")) {
-      return jsonError("Only images are allowed", 415);
+      const isHtml = contentType.toLowerCase().includes("text/html");
+      const msg = isHtml
+        ? "Only images are allowed; this URL may require login (e.g. Facebook/Instagram) or returns a page instead of an image."
+        : "Only images are allowed";
+      return jsonError(msg, 415);
     }
     const contentLengthHeader = originResp.headers.get("content-length");
 
