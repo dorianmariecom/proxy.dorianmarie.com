@@ -138,8 +138,14 @@ function jsonError(message, status = 400) {
   );
 }
 
-export default {
-  async fetch(request, env) {
+async function handleProxy(request, env) {
+    if (!env.FILES) {
+      return jsonError(
+        "Server misconfiguration: R2 FILES binding is missing. Deploy with wrangler.toml r2_buckets or attach the bucket in the dashboard.",
+        500
+      );
+    }
+
     const reqUrl = new URL(request.url);
     const sourceUrlStr = getParam(reqUrl, "url");
     if (!sourceUrlStr) {
@@ -262,5 +268,17 @@ export default {
       status: originResp.status,
       headers
     });
+}
+
+export default {
+  async fetch(request, env) {
+    try {
+      return await handleProxy(request, env);
+    } catch (error) {
+      console.error("proxy worker error:", error);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      return jsonError(message, 500);
+    }
   }
 };
